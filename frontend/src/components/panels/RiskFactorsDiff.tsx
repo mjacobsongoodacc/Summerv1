@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, TrendingUp } from "lucide-react";
 import type { RiskFactorChange } from "../../types";
+import { classToColor } from "../../lib/citationColors";
 
 interface Props {
   changes: RiskFactorChange[];
@@ -26,12 +27,12 @@ export default function RiskFactorsDiff({ changes }: Props) {
     <li className="border-b border-gray-100 py-2 text-sm leading-relaxed text-gray-800 last:border-b-0">
       <span className="mr-2 inline-flex align-middle">
         {c.change_type === "added" && (
-          <span className="rounded border border-green-200 bg-green-50 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-green-800">
+          <span className="border border-cite-risk/45 bg-cite-risk/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-cite-risk">
             Added
           </span>
         )}
         {c.change_type === "intensified" && (
-          <span className="inline-flex items-center gap-1 rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-900">
+          <span className="inline-flex items-center gap-1 border border-cite-debt/45 bg-cite-debt/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-cite-debt">
             Intensified
             <TrendingUp className="inline h-3 w-3 shrink-0" strokeWidth={2} aria-hidden />
           </span>
@@ -42,8 +43,15 @@ export default function RiskFactorsDiff({ changes }: Props) {
   );
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-      <h3 className="mb-4 font-light tracking-wide text-carnegie-navy">Risk factor delta</h3>
+    <div className="border border-gray-200 bg-white p-5">
+      <h3 className="mb-4 flex items-center gap-2 font-light tracking-wide text-gray-900">
+        <span
+          className="inline-block h-2 w-2 shrink-0"
+          style={{ backgroundColor: classToColor("risk") }}
+          aria-hidden
+        />
+        Risk factor delta
+      </h3>
       <div className="space-y-6">
         <div>
           <h4 className="mb-2 text-xs font-normal uppercase tracking-wide text-gray-500">Additions</h4>

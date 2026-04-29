@@ -1,14 +1,26 @@
+import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { ExternalLink } from "lucide-react";
 import type { ExtractedValue } from "../../types";
+import { classToColor, metricKeyToClass } from "../../lib/citationColors";
 
 interface Props {
   ev: ExtractedValue;
   children: React.ReactNode;
 }
 
+function brighten(hex: string): string {
+  const v = hex.replace("#", "");
+  const n = Number.parseInt(v, 16);
+  const r = Math.min(255, ((n >> 16) & 0xff) + 40);
+  const g = Math.min(255, ((n >> 8) & 0xff) + 40);
+  const b = Math.min(255, (n & 0xff) + 40);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
 export default function ClickableNumber({ ev, children }: Props) {
   const navigate = useNavigate();
+  const citeCol = useMemo(() => classToColor(metricKeyToClass(ev.metric_key)), [ev.metric_key]);
 
   const handleClick = () => {
     const params = new URLSearchParams({
@@ -23,10 +35,20 @@ export default function ClickableNumber({ ev, children }: Props) {
     <button
       type="button"
       onClick={handleClick}
-      className="group inline-flex cursor-pointer items-center gap-1 border-none bg-transparent p-0 font-mono tabular-nums text-inherit underline decoration-dotted decoration-gray-400 underline-offset-4 hover:decoration-carnegie-navy"
+      style={{ textDecorationColor: citeCol }}
+      className="group inline-flex cursor-pointer items-center gap-1 border-none bg-transparent p-0 text-inherit underline decoration-dotted decoration-2 underline-offset-4"
+      onMouseEnter={(e) => {
+        (e.currentTarget.style as CSSStyleDeclaration).textDecorationColor = citeCol;
+      }}
+      onMouseOver={(e) => {
+        (e.currentTarget.style as CSSStyleDeclaration).textDecorationColor = brighten(citeCol);
+      }}
+      onMouseOut={(e) => {
+        (e.currentTarget.style as CSSStyleDeclaration).textDecorationColor = citeCol;
+      }}
     >
       <span>{children}</span>
-      <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-70" strokeWidth={1.75} aria-hidden />
+      <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-70" strokeWidth={1.75} aria-hidden />
     </button>
   );
 }

@@ -5,6 +5,8 @@ export interface FilingMetadata {
   ticker: string;
   filing_type: string;
   period_end_date: string;
+  /** Exact SEC filing date when provided by API; omit `"Filed …"` unless set and distinct from fiscal period-end. */
+  filing_date?: string | null;
   accession_number: string;
   source_url: string;
 }
@@ -73,6 +75,7 @@ export interface FilingDetailResponse {
   ticker: string;
   filing_type: string;
   period_end_date: string;
+  filing_date?: string | null;
   source_url: string;
   cleaned_html: string;
   section_index: SectionIndexEntry[];
@@ -81,5 +84,7 @@ export interface FilingDetailResponse {
 export interface SectionIndexEntry {
   name: string;
   anchor: string;
+  char_start?: number;
+  char_end?: number;
   id?: string;
 }

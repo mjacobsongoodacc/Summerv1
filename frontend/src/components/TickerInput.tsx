@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { Hash } from "lucide-react";
 
 interface Props {
@@ -6,19 +7,21 @@ interface Props {
 }
 
 export default function TickerInput({ value, onChange }: Props) {
+  const id = useId();
   return (
-    <label className="flex flex-col gap-1">
-      <span className="flex items-center gap-1.5 text-xs font-normal uppercase tracking-wide text-gray-500">
-        <Hash className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} aria-hidden />
-        Ticker
-      </span>
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value.toUpperCase())}
-        className="w-28 rounded-md border border-gray-200 px-3 py-2 font-mono text-sm tabular-nums outline-none ring-carnegie-navy focus:ring-1"
-        placeholder="PGR"
-        maxLength={8}
-      />
+    <label className="text-[13px]">
+      <span className="sr-only">Ticker</span>
+      <div className="relative">
+        <Hash className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-preview-textDim" strokeWidth={1.75} aria-hidden />
+        <input
+          id={id}
+          value={value}
+          onChange={(e) => onChange(e.target.value.toUpperCase())}
+          className="h-8 w-24 border border-preview-chromeBorder bg-transparent px-7 py-0 font-mono text-[13px] tabular-nums leading-none text-preview-text outline-none"
+          placeholder="PGR"
+          maxLength={8}
+        />
+      </div>
     </label>
   );
 }

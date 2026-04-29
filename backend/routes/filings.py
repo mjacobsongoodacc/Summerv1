@@ -23,6 +23,7 @@ async def get_filing(filing_id: UUID) -> FilingDetailResponse:
         ticker=row["ticker"],
         filing_type=row["filing_type"],
         period_end_date=row["period_end_date"],
+        filing_date=row.get("filing_date") or row["period_end_date"],
         source_url=row["source_url"],
         cleaned_html=row.get("cleaned_html") or "",
         section_index=section_index if isinstance(section_index, list) else [],

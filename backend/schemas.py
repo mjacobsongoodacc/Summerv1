@@ -95,6 +95,7 @@ class FilingMetadata(BaseModel):
     ticker: str
     filing_type: str
     period_end_date: date
+    filing_date: date
     accession_number: str
     source_url: str
 
@@ -118,6 +119,7 @@ class FilingDetailResponse(BaseModel):
     ticker: str
     filing_type: str
     period_end_date: date
+    filing_date: date
     source_url: str
     cleaned_html: str
     section_index: list[Any]

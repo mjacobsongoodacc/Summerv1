@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routes import analyze, filings
+from routes import analyze, filings, ingest
 
 app = FastAPI(title="Carnegie Screener API")
 
@@ -15,3 +15,4 @@ app.add_middleware(
 
 app.include_router(analyze.router, prefix="/api")
 app.include_router(filings.router, prefix="/api")
+app.include_router(ingest.router, prefix="/api")

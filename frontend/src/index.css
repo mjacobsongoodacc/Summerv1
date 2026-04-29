@@ -2,7 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
+* {
+  box-sizing: border-box;
+}
+
 body {
+  margin: 0;
+  background: #1e1e1e;
+  color: #e8e8e8;
   font-family:
     -apple-system,
     BlinkMacSystemFont,
@@ -10,10 +17,91 @@ body {
     "Segoe UI",
     Roboto,
     sans-serif;
+  font-size: 13px;
+  font-feature-settings: "tnum" 1;
 }
 
-.cite-mark {
-  transition:
-    background-color 3s ease,
-    box-shadow 3s ease;
+.sec-doc table {
+  border-collapse: collapse;
+}
+
+.sec-doc table,
+.sec-doc td,
+.sec-doc th {
+  font-size: 13px;
+}
+
+.sec-doc h1,
+.sec-doc h2,
+.sec-doc h3,
+.sec-doc h4 {
+  font-weight: 700;
+  color: #000;
+}
+
+.sec-doc p {
+  margin: 0.5em 0;
+  line-height: 1.55;
+}
+
+.sec-doc a {
+  color: #0a84ff;
+  text-decoration: underline;
+}
+
+.sec-doc span[data-cite-wrap] {
+  background-color: var(--cite-tint);
+  border-bottom: 1px solid var(--cite-color);
+  padding: 0 2px;
+  margin: 0 -2px;
+  transition: background-color 150ms ease;
+}
+
+.sec-doc span[data-cite-wrap]:hover:not(.cite-filtered) {
+  background-color: var(--cite-tint-hover);
+}
+
+.sec-doc span[data-cite-wrap].cite-filtered:hover {
+  background-color: transparent !important;
+}
+
+.sec-doc span[data-cite-wrap].cite-filtered {
+  background-color: transparent !important;
+  border-bottom: none !important;
+}
+
+.cite-target.cite-pulse:not(.cite-filtered) {
+  animation: citePulse 3s ease forwards;
+}
+
+.cite-target.cite-pulse.cite-filtered {
+  animation: citePulseFiltered 3s ease forwards;
+}
+
+@keyframes citePulse {
+  0% {
+    background-color: rgba(250, 204, 21, 0.75);
+    box-shadow: 0 0 0 6px rgba(250, 204, 21, 0.25);
+    border-bottom-color: rgba(250, 176, 5, 0.95);
+  }
+  55%,
+  100% {
+    background-color: var(--cite-tint);
+    box-shadow: none;
+    border-bottom-color: var(--cite-color);
+  }
+}
+
+@keyframes citePulseFiltered {
+  0% {
+    background-color: rgba(250, 204, 21, 0.75);
+    box-shadow: 0 0 0 6px rgba(250, 204, 21, 0.25);
+    border-bottom-color: rgba(250, 176, 5, 0.95);
+  }
+  55%,
+  100% {
+    background-color: transparent;
+    box-shadow: none;
+    border-bottom: none;
+  }
 }

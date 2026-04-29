@@ -11,22 +11,22 @@ interface Props {
 
 export default function IndustryDropdown({ value, onChange }: Props) {
   return (
-    <label className="flex flex-col gap-1">
-      <span className="flex items-center gap-1.5 text-xs font-normal uppercase tracking-wide text-gray-500">
-        <Building2 className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} aria-hidden />
-        Industry
-      </span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value as Industry)}
-        className="min-w-[160px] rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none ring-carnegie-navy focus:ring-1"
-      >
-        {OPTIONS.map((o) => (
-          <option key={o} value={o}>
-            {o}
-          </option>
-        ))}
-      </select>
+    <label className="text-[13px]">
+      <span className="sr-only">Industry</span>
+      <div className="relative">
+        <Building2 className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-preview-textDim" strokeWidth={1.75} aria-hidden />
+        <select
+          value={value}
+          onChange={(e) => onChange(e.target.value as Industry)}
+          className="h-8 min-w-[156px] border border-preview-chromeBorder bg-transparent px-7 py-0 text-[13px] text-preview-text outline-none"
+        >
+          {OPTIONS.map((o) => (
+            <option key={o} value={o} className="bg-preview-chrome text-preview-text">
+              {o}
+            </option>
+          ))}
+        </select>
+      </div>
     </label>
   );
 }

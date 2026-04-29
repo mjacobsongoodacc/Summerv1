@@ -1,7 +1,6 @@
 import { useMemo } from "react";
 import {
   CartesianGrid,
-  Legend,
   Line,
   LineChart,
   ResponsiveContainer,
@@ -10,9 +9,11 @@ import {
   YAxis,
 } from "recharts";
 import type { ExtractedValue } from "../../types";
+import { classToColor } from "../../lib/citationColors";
 
 interface Props {
   extractedValues: Record<string, ExtractedValue[]>;
+  loading?: boolean;
 }
 
 const YEARS = [2021, 2022, 2023, 2024, 2025];
@@ -22,7 +23,7 @@ function pick(evMap: Record<string, ExtractedValue[]>, key: string): number | nu
   return v != null ? Number(v) : null;
 }
 
-export default function FCFvsNetIncome({ extractedValues }: Props) {
+export default function FCFvsNetIncome({ extractedValues, loading = false }: Props) {
   const data = useMemo(
     () =>
       YEARS.map((y) => ({
@@ -33,25 +34,59 @@ export default function FCFvsNetIncome({ extractedValues }: Props) {
     [extractedValues],
   );
 
+  const hasData = data.some((d) => d.fcf != null || d.ni != null);
+
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-      <h3 className="mb-4 font-light tracking-wide text-carnegie-navy">FCF vs net income</h3>
-      <div className="h-52 w-full">
+    <article className="border border-preview-chromeBorder bg-preview-chrome p-6">
+      <h3 className="mb-4 flex items-center gap-2 text-[14px] font-light tracking-wide text-white">
+        <span className="inline-block h-2 w-2 shrink-0" style={{ backgroundColor: classToColor("fcf") }} aria-hidden />
+        FCF vs net income
+        <span className="ml-auto text-[11px] text-preview-textDim">Item 7</span>
+      </h3>
+      <div className="relative h-[240px] w-full border border-preview-chromeBorder p-2">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-            <XAxis dataKey="year" tick={{ fontSize: 11 }} stroke="#9ca3af" />
-            <YAxis tick={{ fontSize: 11 }} stroke="#9ca3af" domain={["auto", "auto"]} />
-            <Tooltip formatter={(v: number) => v?.toLocaleString()} />
-            <Legend />
-            <Line type="monotone" dataKey="fcf" name="Free cash flow" stroke="#1a365d" strokeWidth={2} dot connectNulls />
-            <Line type="monotone" dataKey="ni" name="Net income" stroke="#64748b" strokeWidth={2} dot connectNulls />
+            <CartesianGrid stroke="#2F2F2F" />
+            <XAxis dataKey="year" tick={{ fontSize: 11, fill: "#9A9A9A" }} tickLine={false} />
+            <YAxis tick={{ fontSize: 11, fill: "#9A9A9A" }} tickLine={false} domain={["auto", "auto"]} />
+            <Tooltip
+              formatter={(v: number) => (v == null ? "—" : v.toLocaleString())}
+              contentStyle={{
+                backgroundColor: "#2A2A2A",
+                border: "1px solid #3A3A3A",
+                color: "#E8E8E8",
+              }}
+            />
+            {!loading && hasData && (
+              <>
+                <Line
+                  type="monotone"
+                  dataKey="fcf"
+                  name="Free cash flow"
+                  stroke={classToColor("fcf")}
+                  strokeWidth={2}
+                  dot={false}
+                  connectNulls
+                />
+                <Line
+                  type="monotone"
+                  dataKey="ni"
+                  name="Net income"
+                  stroke={classToColor("financial")}
+                  strokeWidth={2}
+                  dot={false}
+                  connectNulls
+                />
+              </>
+            )}
           </LineChart>
         </ResponsiveContainer>
+        {!loading && !hasData && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[12px] text-preview-textDim">
+            No data available
+          </div>
+        )}
       </div>
-      <p className="mt-2 text-xs font-normal text-gray-500">
-        Five-year series sourced from seeded placeholders where FY labels align with ingest metric keys.
-      </p>
-    </div>
+    </article>
   );
 }

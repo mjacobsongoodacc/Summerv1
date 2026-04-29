@@ -2,167 +2,227 @@ from __future__ import annotations
 
 import html
 import re
-from typing import Iterable
+import warnings
 
-from bs4 import BeautifulSoup, NavigableString, Tag
+from bs4 import BeautifulSoup, Comment, NavigableString, Tag, XMLParsedAsHTMLWarning
 
-ITEM_HEADING_RE = re.compile(r"^\s*Item\s+(\d+[A-Z]?)\.?\s+(.+?)$", re.IGNORECASE)
-BLOCK_TAGS = {"h1", "h2", "h3", "h4", "p", "div", "li", "table"}
-HEADING_TAGS = {"h1", "h2", "h3", "h4"}
+ITEM_HEADING_RE = re.compile(
+    r"^\s*Item\s+(?P<num>\d+[A-Z]?)\.?\s+(?P<title>.+?)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+ITEM_HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6", "div", "p", "span")
+
+ALLOWED_TAGS = {
+    "table",
+    "tr",
+    "td",
+    "th",
+    "thead",
+    "tbody",
+    "tfoot",
+    "colgroup",
+    "col",
+    "strong",
+    "b",
+    "em",
+    "i",
+    "u",
+    "sup",
+    "sub",
+    "br",
+    "hr",
+    "p",
+    "div",
+    "span",
+    "a",
+    *{f"h{i}" for i in range(1, 7)},
+}
+
+
+CELL_ATTRS = frozenset({"colspan", "rowspan", "width", "height", "align", "valign", "style"})
+TABLE_ATTRS = frozenset({"style", "width", "border", "cellpadding", "cellspacing", "frame", "rules"})
 
 
 def clean_10k_html(raw_html: str) -> tuple[str, list[dict]]:
-    soup = BeautifulSoup(raw_html, "lxml")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", XMLParsedAsHTMLWarning)
+        soup = BeautifulSoup(raw_html, "lxml")
 
-    for tag in soup.find_all(True):
-        name = tag.name.lower() if tag.name else ""
-        if name in {"script", "style"} or name.startswith("ix:") or name.startswith("xbrli:"):
+    for c in soup.find_all(string=lambda t: isinstance(t, Comment)):
+        c.extract()
+
+    for tag in list(soup.find_all(True)):
+        name = (tag.name or "").lower()
+        if name in {"script", "style"}:
             tag.decompose()
             continue
+        if name.startswith("ix:") or name.startswith("ixt:") or name.startswith("xbrli:"):
+            tag.unwrap()
+
+    for tag in list(soup.find_all(True)):
         if _is_hidden(tag):
             tag.decompose()
 
-    root = soup.body or soup
-    blocks = list(_iter_blocks(root))
-    cleaned_blocks = [_render_block(block) for block in blocks]
-    cleaned_html = "\n".join(block for block in cleaned_blocks if block).strip()
+    _unwrap_disallowed_tags(soup)
 
-    indexed_html, section_index = _inject_section_anchors(cleaned_html)
+    for tag in soup.find_all(True):
+        if not isinstance(tag, Tag):
+            continue
+        _strip_attributes(tag)
+
+    root = soup.body or soup
+    fragment = root.decode_contents() if hasattr(root, "decode_contents") else ""
+    cleaned_html = fragment.strip()
+
+    indexed_html, section_index = _inject_item_anchors_and_index(cleaned_html)
     return indexed_html, section_index
 
 
-def _is_hidden(tag: Tag) -> bool:
-    if tag.has_attr("hidden") or str(tag.get("aria-hidden", "")).lower() == "true":
-        return True
+def _unwrap_disallowed_tags(soup: BeautifulSoup) -> None:
+    changed = True
+    while changed:
+        changed = False
+        for tag in list(soup.find_all(True)):
+            if not isinstance(tag, Tag):
+                continue
+            name = (tag.name or "").lower()
+            if name in {"html", "body", "[document]"}:
+                continue
+            if name.startswith("ix:") or name.startswith("ixt:") or name.startswith("xbrli:"):
+                tag.unwrap()
+                changed = True
+                continue
+            if name not in ALLOWED_TAGS:
+                tag.unwrap()
+                changed = True
 
-    style = str(tag.get("style", "")).replace(" ", "").lower()
+
+def _strip_attributes(tag: Tag) -> None:
+    name = (tag.name or "").lower()
+    attrs = dict(tag.attrs)
+    kept: dict[str, str | list[str]] = {}
+    for key, val in attrs.items():
+        lk = key.lower()
+        if lk == "class":
+            continue
+        if lk == "style":
+            kept[key] = val
+            continue
+        if name == "a" and lk in {"href", "name"}:
+            kept[key] = val
+            continue
+        if name in {"td", "th"} and lk in CELL_ATTRS:
+            kept[key] = val
+            continue
+        if name == "table" and lk in TABLE_ATTRS:
+            kept[key] = val
+            continue
+        if name in {"colgroup", "col"} and lk in {"span", "style", "width"}:
+            kept[key] = val
+            continue
+        if name in {"div", "span"} and lk == "style":
+            kept[key] = val
+            continue
+        if name in {"p", "h1", "h2", "h3", "h4", "h5", "h6"} and lk == "style":
+            kept[key] = val
+            continue
+        if name == "tr" and lk == "style":
+            kept[key] = val
+            continue
+
+    tag.attrs = kept
+
+
+def _is_hidden(tag: Tag) -> bool:
+    attrs = tag.attrs or {}
+    if "hidden" in attrs or str(attrs.get("aria-hidden", "")).lower() == "true":
+        return True
+    style = str(attrs.get("style", "")).replace(" ", "").lower()
     if "display:none" in style or "visibility:hidden" in style:
         return True
-
     return False
 
 
-def _iter_blocks(node: Tag) -> Iterable[Tag]:
-    for child in node.children:
-        if isinstance(child, NavigableString):
+def _inject_item_anchors_and_index(cleaned_html: str) -> tuple[str, list[dict]]:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", XMLParsedAsHTMLWarning)
+        soup = BeautifulSoup(cleaned_html, "lxml")
+    container = soup.body if soup.body else soup
+
+    headings: list[tuple[str, str]] = []
+    seen_anchors: set[str] = set()
+    for h in container.find_all(ITEM_HEADING_TAGS, recursive=True):
+        text = _visible_heading_text(h)
+        if not text or len(text) > 220:
             continue
-        if not isinstance(child, Tag):
+        match = ITEM_HEADING_RE.match(text)
+        if not match:
             continue
-        name = child.name.lower()
-        if name == "table":
-            yield child
+        num = match.group("num").strip()
+        title = match.group("title").strip()
+        anchor = _item_anchor_slug(num, title)
+        if anchor in seen_anchors:
             continue
-        if name in BLOCK_TAGS:
-            if _block_text(child):
-                yield child
+        seen_anchors.add(anchor)
+        h["id"] = anchor
+        display_name = f"Item {num}. {title}".strip()
+        headings.append((anchor, display_name))
+
+    if soup.body:
+        indexed_html = soup.body.decode_contents().strip()
+    else:
+        indexed_html = str(container)
+
+    section_index: list[dict[str, str | int]] = []
+    for i, (anchor, display_name) in enumerate(headings):
+        quoted = html.escape(anchor)
+        markers = [f'id="{quoted}"', f"id='{quoted}'"]
+        pos = -1
+        for m in markers:
+            pos = indexed_html.find(m)
+            if pos >= 0:
+                break
+        if pos < 0:
             continue
-        yield from _iter_blocks(child)
+        tag_open = indexed_html.rfind("<", 0, pos)
+        char_start = tag_open if tag_open >= 0 else pos
+        next_start = len(indexed_html)
+        if i + 1 < len(headings):
+            na = headings[i + 1][0]
+            qn = html.escape(na)
+            nm = [f'id="{qn}"', f"id='{qn}'"]
+            np = -1
+            for m in nm:
+                np = indexed_html.find(m, pos + 1)
+                if np >= 0:
+                    break
+            if np >= 0:
+                tag_o = indexed_html.rfind("<", 0, np)
+                next_start = tag_o if tag_o >= 0 else np
+        char_end = max(char_start, next_start - 1)
+        section_index.append(
+            {
+                "name": display_name,
+                "anchor": anchor,
+                "char_start": char_start,
+                "char_end": char_end,
+            }
+        )
+
+    return indexed_html, section_index
 
 
-def _render_block(tag: Tag) -> str:
-    name = tag.name.lower()
-    if name in HEADING_TAGS:
-        text = _inline_html(tag)
-        return f"<{name}>{text}</{name}>" if text else ""
-
-    if name == "table":
-        rows_html = []
-        for row in tag.find_all("tr"):
-            cells_html = []
-            for cell in row.find_all(["td", "th"]):
-                cell_text = _block_text(cell)
-                if cell_text:
-                    cells_html.append(f"<td>{html.escape(cell_text)}</td>")
-            if cells_html:
-                rows_html.append(f"<tr>{''.join(cells_html)}</tr>")
-        return f"<table>{''.join(rows_html)}</table>" if rows_html else ""
-
-    text = _inline_html(tag)
-    return f"<p>{text}</p>" if text else ""
-
-
-def _inline_html(tag: Tag) -> str:
+def _visible_heading_text(tag: Tag) -> str:
     parts: list[str] = []
-    for child in tag.children:
+    for child in tag.descendants:
         if isinstance(child, NavigableString):
-            text = _normalize_ws(str(child))
-            if text:
-                parts.append(html.escape(text))
-            continue
-        if not isinstance(child, Tag):
-            continue
-        child_name = child.name.lower()
-        if child_name in {"strong", "b"}:
-            inner = _inline_html(child)
-            if inner:
-                parts.append(f"<strong>{inner}</strong>")
-            continue
-        if child_name == "br":
-            parts.append(" ")
-            continue
-        nested = _inline_html(child)
-        if nested:
-            parts.append(nested)
-    return _normalize_inline("".join(parts))
+            parts.append(str(child))
+    raw = "".join(parts)
+    return re.sub(r"\s+", " ", raw).strip()
 
 
-def _normalize_inline(value: str) -> str:
-    value = re.sub(r"\s+", " ", value)
-    value = re.sub(r"\s+(</strong>)", r"\1", value)
-    value = re.sub(r"(<strong>)\s+", r"\1", value)
-    return value.strip()
-
-
-def _block_text(tag: Tag) -> str:
-    if tag.name and tag.name.lower() == "table":
-        rows = []
-        for row in tag.find_all("tr"):
-            texts = [_normalize_ws(cell.get_text(" ", strip=True)) for cell in row.find_all(["td", "th"])]
-            texts = [text for text in texts if text]
-            if texts:
-                rows.append(" | ".join(texts))
-        return "\n".join(rows).strip()
-    return _normalize_ws(tag.get_text(" ", strip=True))
-
-
-def _inject_section_anchors(cleaned_html: str) -> tuple[str, list[dict]]:
-    soup = BeautifulSoup(cleaned_html, "lxml")
-    container = soup.body or soup
-    blocks = container.find_all(["h1", "h2", "h3", "h4", "p", "table"], recursive=False)
-
-    section_markers: list[dict] = []
-    text_cursor = 0
-    previous_block = False
-
-    for block in blocks:
-        block_text = _block_text(block)
-        if not block_text:
-            continue
-        if previous_block:
-            text_cursor += 2
-        start = text_cursor
-        if block.name in HEADING_TAGS:
-            match = ITEM_HEADING_RE.match(block_text)
-            if match:
-                anchor = _slugify(block_text)
-                block["id"] = anchor
-                section_markers.append({"name": block_text, "anchor": anchor, "char_start": start})
-        text_cursor += len(block_text)
-        previous_block = True
-
-    total_chars = text_cursor
-    for index, marker in enumerate(section_markers):
-        next_start = section_markers[index + 1]["char_start"] if index + 1 < len(section_markers) else total_chars
-        marker["char_end"] = max(marker["char_start"], next_start - 1)
-
-    body = container.decode_contents() if hasattr(container, "decode_contents") else str(container)
-    return body.strip(), section_markers
-
-
-def _slugify(value: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
-    return slug or "section"
-
-
-def _normalize_ws(value: str) -> str:
-    return re.sub(r"\s+", " ", value).strip()
+def _item_anchor_slug(num: str, title: str) -> str:
+    num_part = re.sub(r"[^a-zA-Z0-9]+", "", num).lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    slug = slug or "section"
+    return f"item-{num_part}-{slug}"

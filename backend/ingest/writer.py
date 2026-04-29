@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from postgrest.exceptions import APIError
 from supabase_client import supabase
 
 
@@ -17,16 +18,27 @@ def write_filing(ticker: str, filing_data: dict[str, Any]) -> str:
         "ticker": ticker,
         "filing_type": "10-K",
         "period_end_date": filing_data["period_end_date"],
+        "filing_date": filing_data.get("filing_date") or filing_data["period_end_date"],
         "accession_number": filing_data["accession_number"],
         "source_url": filing_data["source_url"],
         "cleaned_html": filing_data["cleaned_html"],
         "section_index": filing_data["section_index"],
     }
-    response = (
-        supabase.table("filings")
-        .upsert(payload, on_conflict="accession_number")
-        .execute()
-    )
+    try:
+        response = (
+            supabase.table("filings")
+            .upsert(payload, on_conflict="accession_number")
+            .execute()
+        )
+    except APIError as exc:
+        if "filing_date" not in str(exc):
+            raise
+        payload.pop("filing_date", None)
+        response = (
+            supabase.table("filings")
+            .upsert(payload, on_conflict="accession_number")
+            .execute()
+        )
     row = (response.data or [None])[0]
     if not row:
         lookup = (

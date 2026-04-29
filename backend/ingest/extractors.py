@@ -7,7 +7,7 @@ from typing import Any
 from bs4 import BeautifulSoup, Tag
 
 YEAR_RE = re.compile(r"\b(20\d{2})\b")
-NUMBER_RE = re.compile(r"^\(?\$?[\d,]+(?:\.\d+)?\)?$")
+NUMBER_RE = re.compile(r"^\(?\s*\$?[\d,]+(?:\.\d+)?\s*\)?$")
 PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)%")
 
 
@@ -22,167 +22,161 @@ class ParsedTable:
 
 def extract_financial_trends(cleaned_html: str, section_index: list[dict]) -> list[dict[str, Any]]:
     soup = BeautifulSoup(cleaned_html, "lxml")
-    item8_anchor = _find_section_anchor(section_index, ("item 8", "financial statements"))
-    tables = _tables_in_section(soup, item8_anchor)
-    table = _select_table(tables, ("net premiums earned", "total revenues", "revenues"))
-    if not table:
+    tables = [_parse_table(table) for table in soup.find_all("table")]
+    premiums_table = _select_table(tables, ("premiums earned:", "property and liability insurance"))
+    income_table = _select_table(tables, ("total revenues", "income before income taxes", "net income"))
+    if not premiums_table or not income_table:
         return []
-
-    current_year = max(table.year_columns) if table.year_columns else None
-    if current_year is None:
-        return []
-
-    revenue_row = _find_row(table, ("net premiums earned", "total revenues", "revenues"))
-    underwriting_profit_row = _find_row(table, ("underwriting profit", "gross profit"))
-    operating_row = _find_row(
-        table,
-        (
-            "income before income taxes",
-            "pretax income",
-            "operating income",
-            "income from operations",
-        ),
-    )
-    net_income_row = _find_row(table, ("net income",))
 
     values: list[dict[str, Any]] = []
-    for year in sorted(table.year_columns):
-        revenue = _row_year_value(revenue_row, table, year)
-        if revenue is not None:
-            values.append(_metric_from_row(cleaned_html, table, revenue_row, year, "net_premiums_fy", "Net premiums earned", "Item 8", revenue))
+    premium_values = _extract_premiums_by_year(premiums_table)
+    revenue_row = _find_row(income_table, ("total revenues",))
+    operating_row = _find_row(income_table, ("income before income taxes",))
+    net_income_row = _find_row(income_table, ("net income",))
 
-        numerator = _row_year_value(underwriting_profit_row, table, year)
-        if numerator is not None and revenue not in (None, 0):
+    for year in sorted(set(premium_values) | set(income_table.year_columns)):
+        revenue = premium_values.get(year)
+        if revenue is not None:
             values.append(
-                _metric_from_numeric(
-                    year,
-                    "gross_margin_fy",
-                    "Underwriting margin",
-                    "Item 8",
-                    round((numerator / revenue) * 100, 2),
-                    cleaned_html,
-                    table,
-                    underwriting_profit_row,
+                _metric_from_text(
+                    metric_key=f"net_premiums_fy{year}",
+                    label=f"Net premiums earned FY{year}",
+                    section="Item 15",
+                    value_numeric=revenue,
+                    paragraph_text=_premiums_paragraph_for_year(premiums_table, year),
+                    cleaned_html=cleaned_html,
+                    snippet=str(int(revenue)) if float(revenue).is_integer() else str(revenue),
                 )
             )
 
-        operating = _row_year_value(operating_row, table, year)
-        if operating is not None and revenue not in (None, 0):
+        total_revenue = _row_year_value(revenue_row, income_table, year)
+        operating = _row_year_value(operating_row, income_table, year)
+        if operating is not None and total_revenue not in (None, 0):
             values.append(
                 _metric_from_numeric(
                     year,
                     "operating_margin_fy",
                     "Operating margin",
-                    "Item 8",
-                    round((operating / revenue) * 100, 2),
+                    "Item 15",
+                    round((operating / total_revenue) * 100, 2),
                     cleaned_html,
-                    table,
+                    income_table,
+                    operating_row,
+                )
+            )
+            values.append(
+                _metric_from_numeric(
+                    year,
+                    "gross_margin_fy",
+                    "Underwriting margin",
+                    "Item 15",
+                    round((operating / total_revenue) * 100, 2),
+                    cleaned_html,
+                    income_table,
                     operating_row,
                 )
             )
 
-        net_income = _row_year_value(net_income_row, table, year)
+        net_income = _row_year_value(net_income_row, income_table, year)
         if net_income is not None:
-            values.append(_metric_from_row(cleaned_html, table, net_income_row, year, "net_income_fy", "Net income", "Item 8", net_income))
+            values.append(
+                _metric_from_row(
+                    cleaned_html,
+                    income_table,
+                    net_income_row,
+                    year,
+                    "net_income_fy",
+                    "Net income",
+                    "Item 15",
+                    net_income,
+                )
+            )
 
     return values
 
 
 def extract_segments(cleaned_html: str, section_index: list[dict]) -> list[dict[str, Any]]:
     soup = BeautifulSoup(cleaned_html, "lxml")
-    tables = list(_tables_with_context(soup, ("segment information", "operating segments", "segments")))
-    if not tables:
+    tables = [_parse_table(table) for table in soup.find_all("table")]
+    revenue_table = _select_table(tables, ("supplementary insurance information", "net premiums written", "segment"))
+    profit_table = _select_table(tables, ("pretax underwriting profit", "total underwriting revenue", "personal lines", "commercial lines"))
+    if not revenue_table:
         return []
 
-    table = _select_table(tables, ("pretax", "income before income taxes", "revenues", "net premiums"))
-    if not table or not table.year_columns:
-        return []
-
-    current_year = max(table.year_columns)
     segments: list[dict[str, Any]] = []
-
-    for row_index, row in enumerate(table.rows):
-        if not row:
+    capture = False
+    for row_index, row in enumerate(revenue_table.rows):
+        if row and row[0].startswith("Year ended December 31, 2025"):
+            capture = True
             continue
-        label = row[0].strip()
-        lowered = label.lower()
-        if not label or YEAR_RE.search(label) or "total" in lowered or lowered in {"revenues", "pretax income"}:
+        if capture and row and row[0].startswith("Year ended December 31, 2024"):
+            break
+        if not capture or not row:
             continue
-
-        revenue = _row_year_value((row_index, row), table, current_year)
-        if revenue is None:
+        label = row[0]
+        if label.lower() in {"total", "segment"}:
             continue
-
-        char_start, char_end = _locate_row(cleaned_html, table.row_html[row_index], row[1] if len(row) > 1 else label)
+        numeric_texts = [cell for cell in row[1:] if NUMBER_RE.match(cell.strip())]
+        if not numeric_texts:
+            continue
+        value = _parse_number(numeric_texts[-1], revenue_table.unit_scale_to_millions)
+        if value is None:
+            continue
+        char_start, char_end = _locate_row(cleaned_html, revenue_table.row_html[row_index], numeric_texts[-1])
         segments.append(
             {
                 "segment_name": label,
                 "metric": "revenue",
-                "period": f"FY{current_year}",
-                "value": revenue,
+                "period": "FY2025",
+                "value": value,
                 "char_start": char_start,
                 "char_end": char_end,
             }
         )
 
-    op_table = _select_table(tables, ("pretax", "income before income taxes", "operating income"))
-    if op_table and op_table.year_columns:
-        current_year = max(op_table.year_columns)
-        for row_index, row in enumerate(op_table.rows):
-            if not row:
-                continue
-            label = row[0].strip()
-            lowered = label.lower()
-            if not label or YEAR_RE.search(label) or "total" in lowered or "income" in lowered and lowered == "income before income taxes":
-                continue
-            op_income = _row_year_value((row_index, row), op_table, current_year)
-            if op_income is None:
-                continue
-            char_start, char_end = _locate_row(cleaned_html, op_table.row_html[row_index], row[1] if len(row) > 1 else label)
-            segments.append(
-                {
-                    "segment_name": label,
-                    "metric": "op_income",
-                    "period": f"FY{current_year}",
-                    "value": op_income,
-                    "char_start": char_start,
-                    "char_end": char_end,
-                }
-            )
-
+    if profit_table:
+        header = profit_table.rows[0] if profit_table.rows else []
+        segment_names = [name.replace(" 1", "").strip() for name in header[1:4]]
+        profit_row_ref = _find_row(profit_table, ("pretax underwriting profit (loss)",))
+        if profit_row_ref:
+            row_index, row = profit_row_ref
+            numeric_texts = [cell for cell in row[1:] if NUMBER_RE.match(cell.strip())]
+            for segment_name, numeric_text in zip(segment_names, numeric_texts[: len(segment_names)], strict=False):
+                value = _parse_number(numeric_text, profit_table.unit_scale_to_millions)
+                if value is None:
+                    continue
+                char_start, char_end = _locate_row(cleaned_html, profit_table.row_html[row_index], numeric_text)
+                segments.append(
+                    {
+                        "segment_name": segment_name,
+                        "metric": "op_income",
+                        "period": "FY2025",
+                        "value": value,
+                        "char_start": char_start,
+                        "char_end": char_end,
+                    }
+                )
     return segments
 
 
 def extract_debt_maturities(cleaned_html: str, section_index: list[dict]) -> list[dict[str, Any]]:
-    soup = BeautifulSoup(cleaned_html, "lxml")
-    tables = list(_tables_with_context(soup, ("debt", "long-term debt", "maturities")))
-    table = _select_table(tables, ("2026", "2027", "2028", "2029", "2030"))
-    if not table:
-        return []
-
     maturities: list[dict[str, Any]] = []
-    for row_index, row in enumerate(table.rows):
-        if len(row) < 2:
-            continue
-        year_match = YEAR_RE.search(row[0])
-        if not year_match:
-            continue
-        principal = _parse_number(row[1], table.unit_scale_to_millions)
-        if principal is None:
-            continue
-        rate = None
-        rate_match = PERCENT_RE.search(" ".join(row))
-        if rate_match:
-            rate = float(rate_match.group(1))
-        char_start, char_end = _locate_row(cleaned_html, table.row_html[row_index], row[1])
+    pattern = re.compile(
+        r"Form(?: of)? ([\d. ]+)% Senior Note(?:s)? due (\d{4}), issued in the aggregate principal amount of \$([\d,]+)",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(cleaned_html):
+        rate_text, maturity_year, principal_text = match.groups()
+        rate = float(rate_text.replace(" ", ""))
+        principal = round(float(principal_text.replace(",", "")) / 1_000_000, 3)
         maturities.append(
             {
-                "maturity_year": int(year_match.group(1)),
+                "maturity_year": int(maturity_year),
                 "principal": principal,
                 "interest_rate": rate,
-                "description": row[0],
-                "char_start": char_start,
-                "char_end": char_end,
+                "description": match.group(0),
+                "char_start": match.start(),
+                "char_end": match.end(),
             }
         )
     return maturities
@@ -190,13 +184,13 @@ def extract_debt_maturities(cleaned_html: str, section_index: list[dict]) -> lis
 
 def extract_capital_metrics(cleaned_html: str, section_index: list[dict]) -> list[dict[str, Any]]:
     soup = BeautifulSoup(cleaned_html, "lxml")
-    item8_anchor = _find_section_anchor(section_index, ("item 8", "financial statements"))
-    tables = _tables_in_section(soup, item8_anchor)
+    tables = [_parse_table(table) for table in soup.find_all("table")]
     cash_flow_table = _select_table(
         tables,
         (
             "net cash provided by operating activities",
             "cash flows from operating activities",
+            "amortization of equity-based compensation",
         ),
     )
     if not cash_flow_table:
@@ -212,7 +206,14 @@ def extract_capital_metrics(cleaned_html: str, section_index: list[dict]) -> lis
             "additions to property and equipment",
         ),
     )
-    sbc_row = _find_row(cash_flow_table, ("stock-based compensation", "share-based compensation"))
+    sbc_row = _find_row(
+        cash_flow_table,
+        (
+            "stock-based compensation",
+            "share-based compensation",
+            "equity-based compensation",
+        ),
+    )
     net_income_row = _find_row(cash_flow_table, ("net income",))
 
     values: list[dict[str, Any]] = []
@@ -261,13 +262,13 @@ def extract_capital_metrics(cleaned_html: str, section_index: list[dict]) -> lis
                     sbc,
                 )
             )
-        if ocf is not None and capex is not None:
-            fcf = ocf - abs(capex)
+        if ocf is not None:
+            fcf = ocf - abs(capex) if capex is not None else ocf
             values.append(
                 _metric_from_row(
                     cleaned_html,
                     cash_flow_table,
-                    capex_row,
+                    capex_row or ocf_row,
                     year,
                     "free_cash_flow_fy",
                     "Free cash flow",
@@ -304,8 +305,12 @@ def _metric_from_row(
     if row_ref is None:
         raise ValueError(f"Missing row for {prefix}{year}")
     row_index, row = row_ref
-    number_text = row[table.year_columns[year]]
+    number_text = _row_year_text(row, table, year)
+    if number_text is None:
+        raise ValueError(f"Missing year text for {prefix}{year}")
     char_start, char_end = _locate_row(cleaned_html, table.row_html[row_index], number_text)
+    slice_html = cleaned_html[char_start:char_end]
+    plain_para = _plain_visible(slice_html) if slice_html.strip() else " | ".join(row)
     return {
         "metric_key": f"{prefix}{year}",
         "value_numeric": value,
@@ -314,7 +319,7 @@ def _metric_from_row(
         "section": section,
         "char_start": char_start,
         "char_end": char_end,
-        "paragraph_text": " | ".join(row),
+        "paragraph_text": plain_para,
     }
 
 
@@ -331,8 +336,12 @@ def _metric_from_numeric(
     if row_ref is None:
         raise ValueError(f"Missing row for {prefix}{year}")
     row_index, row = row_ref
-    number_text = row[table.year_columns[year]]
+    number_text = _row_year_text(row, table, year)
+    if number_text is None:
+        raise ValueError(f"Missing year text for {prefix}{year}")
     char_start, char_end = _locate_row(cleaned_html, table.row_html[row_index], number_text)
+    slice_html = cleaned_html[char_start:char_end]
+    plain_para = _plain_visible(slice_html) if slice_html.strip() else " | ".join(row)
     return {
         "metric_key": f"{prefix}{year}",
         "value_numeric": value,
@@ -341,7 +350,7 @@ def _metric_from_numeric(
         "section": section,
         "char_start": char_start,
         "char_end": char_end,
-        "paragraph_text": " | ".join(row),
+        "paragraph_text": plain_para,
     }
 
 
@@ -409,10 +418,10 @@ def _parse_table(table: Tag) -> ParsedTable:
             row_html.append(str(row))
 
     year_columns: dict[int, int] = {}
-    for header_row in rows[:3]:
+    for header_row in rows[:4]:
         for index, cell in enumerate(header_row):
             match = YEAR_RE.search(cell)
-            if match and index > 0:
+            if match:
                 year_columns[int(match.group(1))] = index
         if year_columns:
             break
@@ -427,21 +436,26 @@ def _parse_table(table: Tag) -> ParsedTable:
 
 
 def _find_row(table: ParsedTable, patterns: tuple[str, ...]) -> tuple[int, list[str]] | None:
+    normalized_patterns = tuple(pattern.lower() for pattern in patterns)
     for index, row in enumerate(table.rows):
         label = row[0].lower()
-        if any(pattern in label for pattern in patterns):
+        if any(label == pattern for pattern in normalized_patterns):
+            return index, row
+    for index, row in enumerate(table.rows):
+        label = row[0].lower()
+        if any(pattern in label for pattern in normalized_patterns):
             return index, row
     return None
 
 
 def _row_year_value(row_ref: tuple[int, list[str]] | None, table: ParsedTable, year: int) -> float | None:
-    if row_ref is None or year not in table.year_columns:
+    if row_ref is None:
         return None
     _, row = row_ref
-    col_index = table.year_columns[year]
-    if col_index >= len(row):
+    number_text = _row_year_text(row, table, year)
+    if number_text is None:
         return None
-    return _parse_number(row[col_index], table.unit_scale_to_millions)
+    return _parse_number(number_text, table.unit_scale_to_millions)
 
 
 def _parse_number(value: str, scale_to_millions: float) -> float | None:
@@ -449,7 +463,7 @@ def _parse_number(value: str, scale_to_millions: float) -> float | None:
     if not NUMBER_RE.match(text):
         return None
     negative = text.startswith("(") and text.endswith(")")
-    text = text.strip("()").replace("$", "").replace(",", "")
+    text = text.strip("() ").replace("$", "").replace(",", "")
     number = float(text)
     if negative:
         number *= -1
@@ -480,3 +494,92 @@ def _locate_row(cleaned_html: str, row_html: str, number_text: str) -> tuple[int
 
 def _normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
+
+
+def _plain_visible(html_fragment: str) -> str:
+    fragment = html_fragment.strip()
+    if not fragment or "<" not in fragment:
+        return fragment
+    soup = BeautifulSoup(fragment, "lxml")
+    return soup.get_text(" ", strip=True)
+
+
+def _ordered_years(table: ParsedTable) -> list[int]:
+    return sorted(table.year_columns, reverse=True)
+
+
+def _row_year_text(row: list[str], table: ParsedTable, year: int) -> str | None:
+    years = _ordered_years(table)
+    if year not in years:
+        return None
+    numeric_texts = [cell for cell in row[1:] if NUMBER_RE.match(cell.strip())]
+    if len(numeric_texts) < len(years):
+        numeric_texts = [cell for cell in row if NUMBER_RE.match(cell.strip())]
+    year_to_text = dict(zip(years, numeric_texts, strict=False))
+    return year_to_text.get(year)
+
+
+def _extract_premiums_by_year(table: ParsedTable) -> dict[int, float]:
+    result: dict[int, float] = {}
+    current_year: int | None = None
+    for row in table.rows:
+        if not row:
+            continue
+        year_match = re.search(r"December 31,\s*(\d{4})", row[0])
+        if year_match:
+            current_year = int(year_match.group(1))
+            continue
+        if current_year and row[0].lower() == "property and liability insurance":
+            numeric_cells = [_parse_number(cell, table.unit_scale_to_millions) for cell in row[1:]]
+            numeric_cells = [cell for cell in numeric_cells if cell is not None]
+            if numeric_cells:
+                result[current_year] = numeric_cells[-2] if len(numeric_cells) >= 2 else numeric_cells[-1]
+    return result
+
+
+def _premiums_paragraph_for_year(table: ParsedTable, year: int) -> str:
+    capture = []
+    current_year: int | None = None
+    for row in table.rows:
+        if not row:
+            continue
+        year_match = re.search(r"December 31,\s*(\d{4})", row[0])
+        if year_match:
+            current_year = int(year_match.group(1))
+            capture = [row[0]]
+            continue
+        if current_year == year:
+            capture.append(" | ".join(row))
+            if row[0].lower() == "property and liability insurance":
+                return " | ".join(capture)
+    return f"Premiums earned FY{year}"
+
+
+def _metric_from_text(
+    *,
+    metric_key: str,
+    label: str,
+    section: str,
+    value_numeric: float,
+    paragraph_text: str,
+    cleaned_html: str,
+    snippet: str,
+) -> dict[str, Any]:
+    start = cleaned_html.find(snippet)
+    if start < 0:
+        start = cleaned_html.find(paragraph_text[:80]) if paragraph_text else -1
+    if start < 0:
+        start = 0
+    end = start + len(snippet) if snippet else max(1, start + 1)
+    slice_html = cleaned_html[start:end]
+    plain = _plain_visible(slice_html) if slice_html.strip() else paragraph_text
+    return {
+        "metric_key": metric_key,
+        "value_numeric": value_numeric,
+        "value_text": None,
+        "label": label,
+        "section": section,
+        "char_start": max(0, start),
+        "char_end": max(max(0, start) + 1, end),
+        "paragraph_text": plain,
+    }

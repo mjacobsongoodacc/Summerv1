@@ -1,89 +1,99 @@
-import { LayoutGrid, List, Loader2 } from "lucide-react";
-import ThumbnailCard from "./ThumbnailCard";
+import { useMemo } from "react";
 import ContentsList from "./ContentsList";
+import type { DocCitation } from "./DocumentView";
 import type { FilingDetailResponse, SectionIndexEntry } from "../../types";
+import type { CiteCategory } from "../../lib/citationColors";
 
-interface Props {
+type Props = {
   open: boolean;
-  mode: "thumbnails" | "contents";
-  onModeChange: (m: "thumbnails" | "contents") => void;
   filing: FilingDetailResponse | null;
   sections: SectionIndexEntry[];
   html: string;
+  citations: DocCitation[];
+  enabledCategories: Record<CiteCategory, boolean>;
   onPickSection: (anchor: string) => void;
+  onPickCitation: (citationId: string) => void;
+};
+
+function isNewSectionHeading(el: Element): boolean {
+  const id = el.id ?? "";
+  return typeof id === "string" && id.startsWith("item-");
 }
 
-function excerptForAnchor(html: string, anchor: string, maxLen = 280): string {
-  if (!html) return "";
-  const idPattern = new RegExp(`id=["']${anchor}["']`, "i");
-  const idx = html.search(idPattern);
-  if (idx === -1) {
-    const stripped = html.replace(/<[^>]+>/g, " ");
-    return stripped.slice(0, maxLen).trim();
+/** Visible text after section anchor heading: heading + following siblings until length or next item-* section. */
+function excerptForAnchor(doc: Document, anchor: string, maxLen = 280): string {
+  const el = doc.getElementById(anchor);
+  if (!el) return "";
+
+  let acc = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+  let n: Element | null = el.nextElementSibling;
+
+  while (acc.length < maxLen && n) {
+    if (isNewSectionHeading(n)) break;
+
+    const part = (n.textContent ?? "").replace(/\s+/g, " ").trim();
+    if (part.length) {
+      acc = acc.length === 0 ? part : `${acc} ${part}`;
+    }
+
+    if (acc.length >= maxLen) break;
+    n = n.nextElementSibling;
   }
-  const slice = html.slice(idx, idx + 800);
-  const text = slice.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-  const lines = text.split(" ").slice(0, 40).join(" ");
-  return lines.slice(0, maxLen);
+
+  return acc.slice(0, maxLen).trim();
 }
 
 export default function Sidebar({
   open,
-  mode,
-  onModeChange,
   filing,
   sections,
   html,
+  citations,
+  enabledCategories,
   onPickSection,
+  onPickCitation,
 }: Props) {
+  const doc = useMemo(() => new DOMParser().parseFromString(html || "<body></body>", "text/html"), [html]);
+
+  const preservedExcerptChars = useMemo(() => {
+    if (!sections[0]?.anchor) return 0;
+    return excerptForAnchor(doc, sections[0].anchor).length;
+  }, [doc, sections]);
+
   if (!open) {
     return null;
   }
 
   return (
-    <aside className="w-[220px] shrink-0 border-r border-gray-200 bg-white">
-      <div className="flex border-b border-gray-200">
-        <button
-          type="button"
-          className={`flex flex-1 items-center justify-center gap-1.5 px-2 py-2 text-center text-[11px] font-normal uppercase tracking-wide ${
-            mode === "thumbnails" ? "border-b-2 border-carnegie-navy text-carnegie-navy" : "text-gray-500"
-          }`}
-          onClick={() => onModeChange("thumbnails")}
-        >
-          <LayoutGrid className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} aria-hidden />
-          Thumbnails
-        </button>
-        <button
-          type="button"
-          className={`flex flex-1 items-center justify-center gap-1.5 px-2 py-2 text-center text-[11px] font-normal uppercase tracking-wide ${
-            mode === "contents" ? "border-b-2 border-carnegie-navy text-carnegie-navy" : "text-gray-500"
-          }`}
-          onClick={() => onModeChange("contents")}
-        >
-          <List className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} aria-hidden />
-          Contents
-        </button>
+    <aside
+      className="w-[260px] shrink-0 border-r border-preview-chromeBorder bg-preview-sidebar"
+      data-excerpt-preservation-len={preservedExcerptChars}
+    >
+      <div className="border-b border-preview-chromeBorder px-4 py-3 text-[11px] font-normal uppercase tracking-[0.04em] text-preview-textDim">
+        CONTENTS
       </div>
       <div className="max-h-[calc(100vh-120px)] overflow-auto p-3">
         {!filing && (
-          <p className="flex items-center gap-2 text-xs text-gray-500">
-            <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.75} aria-hidden />
+          <p className="px-3 py-2 text-xs text-preview-textDim">
             Loading…
           </p>
         )}
-        {filing && mode === "thumbnails" && (
-          <div className="space-y-3">
-            {sections.map((s) => (
-              <ThumbnailCard
-                key={s.anchor}
-                label={s.name}
-                excerpt={excerptForAnchor(html, s.anchor)}
-                onClick={() => onPickSection(s.anchor)}
-              />
-            ))}
-          </div>
+        {filing && (
+          <>
+            <ContentsList
+              sections={sections}
+              citations={citations}
+              enabledCategories={enabledCategories}
+              onPickSection={onPickSection}
+              onPickCitation={onPickCitation}
+            />
+            {sections.length === 0 && (
+              <p className="my-4 px-1 text-[11px] leading-relaxed text-preview-textDim">
+                No indexed sections returned for this filing. Re-run ingest or refresh after the filing is rebuilt.
+              </p>
+            )}
+          </>
         )}
-        {filing && mode === "contents" && <ContentsList sections={sections} onPick={onPickSection} />}
       </div>
     </aside>
   );

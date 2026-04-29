@@ -80,6 +80,7 @@ def list_10k_filings(cik: str, n: int = 2) -> list[dict[str, str]]:
             {
                 "accession_number": str(accession_number),
                 "period_end_date": str(period_end_date),
+                "filing_date": str(filing_date or period_end_date),
                 "primary_document_url": (
                     f"{SEC_ARCHIVES_BASE_URL}/{cik_no_padding}/{accession_no_dashes}/{primary_document}"
                 ),
