@@ -1,0 +1,18 @@
+# Dependencies & builds
+frontend/node_modules/
+frontend/dist/
+backend/venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Secrets — never commit
+.env
+.env.local
+.env.*.local
+backend/.env
+
+# OS / editor
+.DS_Store
+*.swp
+*.tsbuildinfo
