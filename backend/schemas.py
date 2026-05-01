@@ -37,6 +37,10 @@ class ExtractedValue(BaseModel):
     char_start: int
     char_end: int
     paragraph_text: str
+    anchor_text: str | None = None
+    anchor_hash: str | None = None
+    display_label: str | None = None
+    sub_state: str = "neutral"
     created_at: datetime | None = None
 
 
@@ -53,6 +57,10 @@ class RiskFactorChange(BaseModel):
     change_type: str
     char_start: int | None = None
     char_end: int | None = None
+    anchor_text: str | None = None
+    anchor_hash: str | None = None
+    display_label: str | None = None
+    sub_state: str = "neutral"
     created_at: datetime | None = None
 
 
@@ -123,3 +131,5 @@ class FilingDetailResponse(BaseModel):
     source_url: str
     cleaned_html: str
     section_index: list[Any]
+    extracted_values: list[ExtractedValue] = Field(default_factory=list)
+    risk_factor_changes: list[RiskFactorChange] = Field(default_factory=list)

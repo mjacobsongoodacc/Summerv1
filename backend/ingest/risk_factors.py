@@ -7,6 +7,9 @@ from typing import Any
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
+from ingest.anchor_fields import anchor_fields_at_offset, anchor_fields_for_factor_text
+from ingest.display_fields import annotate_risk_factor_change_rows
+
 HEADING_RE = re.compile(r"^\s*Item\s+(\d+[A-Z]?)\.?\s+(.+?)$", re.IGNORECASE)
 SEVERITY_TERMS = ("may not", "could materially", "significant risk", "material adverse", "substantial")
 ITEM1A_RE = re.compile(r"^\s*item\s+1a\b", re.IGNORECASE)
@@ -175,8 +178,14 @@ def _dump_section_snapshot(section_html: str) -> None:
         print(f"[extract_risk_factors] failed to write snapshot: {exc}")
 
 
-def diff_risk_factors(prior_factors: list[dict], current_factors: list[dict]) -> list[dict[str, Any]]:
-    results: list[dict[str, Any]] = []
+def diff_risk_factors(
+    prior_factors: list[dict],
+    current_factors: list[dict],
+    *,
+    prior_cleaned_html: str = "",
+    current_cleaned_html: str = "",
+) -> list[dict[str, Any]]:
+    results: list[tuple[dict[str, Any], str]] = []
     prior_matched: set[int] = set()
 
     for current in current_factors:
@@ -196,12 +205,15 @@ def diff_risk_factors(prior_factors: list[dict], current_factors: list[dict]) ->
 
         if best_index == -1 or best_score <= 0.7:
             results.append(
-                {
-                    "factor_text": current["text"],
-                    "change_type": "added",
-                    "char_start": current.get("char_start"),
-                    "char_end": current.get("char_end"),
-                }
+                (
+                    {
+                        "factor_text": current["text"],
+                        "change_type": "added",
+                        "char_start": current.get("char_start"),
+                        "char_end": current.get("char_end"),
+                    },
+                    current_cleaned_html,
+                )
             )
             continue
 
@@ -211,27 +223,45 @@ def diff_risk_factors(prior_factors: list[dict], current_factors: list[dict]) ->
         if _is_intensified(prior["text"], current["text"]):
             change_type = "intensified"
         results.append(
-            {
-                "factor_text": current["text"],
-                "change_type": change_type,
-                "char_start": current.get("char_start"),
-                "char_end": current.get("char_end"),
-            }
+            (
+                {
+                    "factor_text": current["text"],
+                    "change_type": change_type,
+                    "char_start": current.get("char_start"),
+                    "char_end": current.get("char_end"),
+                },
+                current_cleaned_html,
+            )
         )
 
     for index, prior in enumerate(prior_factors):
         if index in prior_matched:
             continue
         results.append(
-            {
-                "factor_text": prior["text"],
-                "change_type": "removed",
-                "char_start": prior.get("char_start"),
-                "char_end": prior.get("char_end"),
-            }
+            (
+                {
+                    "factor_text": prior["text"],
+                    "change_type": "removed",
+                    "char_start": prior.get("char_start"),
+                    "char_end": prior.get("char_end"),
+                },
+                prior_cleaned_html,
+            )
         )
 
-    return results
+    enriched = [_enrich_rfc_row(row, html) for row, html in results]
+    return annotate_risk_factor_change_rows(enriched)
+
+
+def _enrich_rfc_row(row: dict[str, Any], cleaned_html: str) -> dict[str, Any]:
+    offset_anchor = anchor_fields_at_offset(cleaned_html, row.get("char_start")) if cleaned_html else None
+    if offset_anchor is not None:
+        row["anchor_text"], row["anchor_hash"] = offset_anchor
+        return row
+    at, ah = anchor_fields_for_factor_text(str(row.get("factor_text") or ""))
+    row["anchor_text"] = at
+    row["anchor_hash"] = ah
+    return row
 
 
 def _build_factor(

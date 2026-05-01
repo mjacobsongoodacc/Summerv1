@@ -6,6 +6,8 @@ from typing import Any
 
 from bs4 import BeautifulSoup, Tag
 
+from ingest.anchor_fields import attach_anchor_fields
+
 YEAR_RE = re.compile(r"\b(20\d{2})\b")
 NUMBER_RE = re.compile(r"^\(?\s*\$?[\d,]+(?:\.\d+)?\s*\)?$")
 PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)%")
@@ -311,7 +313,7 @@ def _metric_from_row(
     char_start, char_end = _locate_row(cleaned_html, table.row_html[row_index], number_text)
     slice_html = cleaned_html[char_start:char_end]
     plain_para = _plain_visible(slice_html) if slice_html.strip() else " | ".join(row)
-    return {
+    out = {
         "metric_key": f"{prefix}{year}",
         "value_numeric": value,
         "value_text": None,
@@ -321,6 +323,7 @@ def _metric_from_row(
         "char_end": char_end,
         "paragraph_text": plain_para,
     }
+    return attach_anchor_fields(out, cleaned_html=cleaned_html)
 
 
 def _metric_from_numeric(
@@ -342,7 +345,7 @@ def _metric_from_numeric(
     char_start, char_end = _locate_row(cleaned_html, table.row_html[row_index], number_text)
     slice_html = cleaned_html[char_start:char_end]
     plain_para = _plain_visible(slice_html) if slice_html.strip() else " | ".join(row)
-    return {
+    out = {
         "metric_key": f"{prefix}{year}",
         "value_numeric": value,
         "value_text": None,
@@ -352,6 +355,7 @@ def _metric_from_numeric(
         "char_end": char_end,
         "paragraph_text": plain_para,
     }
+    return attach_anchor_fields(out, cleaned_html=cleaned_html)
 
 
 def _find_section_anchor(section_index: list[dict], keywords: tuple[str, ...]) -> str | None:
@@ -573,7 +577,7 @@ def _metric_from_text(
     end = start + len(snippet) if snippet else max(1, start + 1)
     slice_html = cleaned_html[start:end]
     plain = _plain_visible(slice_html) if slice_html.strip() else paragraph_text
-    return {
+    out = {
         "metric_key": metric_key,
         "value_numeric": value_numeric,
         "value_text": None,
@@ -583,3 +587,4 @@ def _metric_from_text(
         "char_end": max(max(0, start) + 1, end),
         "paragraph_text": plain,
     }
+    return attach_anchor_fields(out, cleaned_html=cleaned_html)

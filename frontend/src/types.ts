@@ -23,6 +23,10 @@ export interface ExtractedValue {
   char_start: number;
   char_end: number;
   paragraph_text: string;
+  anchor_text?: string | null;
+  anchor_hash?: string | null;
+  display_label?: string | null;
+  sub_state?: string | null;
   created_at?: string | null;
 }
 
@@ -35,6 +39,10 @@ export interface RiskFactorChange {
   change_type: "added" | "removed" | "intensified" | "unchanged";
   char_start: number | null;
   char_end: number | null;
+  anchor_text?: string | null;
+  anchor_hash?: string | null;
+  display_label?: string | null;
+  sub_state?: string | null;
   created_at?: string | null;
 }
 
@@ -79,6 +87,8 @@ export interface FilingDetailResponse {
   source_url: string;
   cleaned_html: string;
   section_index: SectionIndexEntry[];
+  extracted_values?: ExtractedValue[];
+  risk_factor_changes?: RiskFactorChange[];
 }
 
 export interface SectionIndexEntry {

@@ -6,7 +6,9 @@ import warnings
 
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 
+from ingest.anchor_fields import attach_anchor_fields
 from ingest.cleaner import clean_10k_html
+from ingest.display_fields import annotate_extracted_value_rows
 from ingest.edgar import fetch_html, list_10k_filings, resolve_cik
 from ingest.extractors import (
     extract_capital_metrics,
@@ -58,13 +60,19 @@ def ingest_ticker(ticker: str) -> dict[str, int | str]:
 
     current_risk_factors = extract_risk_factors(current_filing["cleaned_html"], current_filing["section_index"])
     prior_risk_factors = extract_risk_factors(prior_filing["cleaned_html"], prior_filing["section_index"])
-    changes = diff_risk_factors(prior_risk_factors, current_risk_factors)
+    changes = diff_risk_factors(
+        prior_risk_factors,
+        current_risk_factors,
+        prior_cleaned_html=prior_filing["cleaned_html"],
+        current_cleaned_html=current_filing["cleaned_html"],
+    )
 
     extracted_values = _dedupe_metric_rows(
         extract_financial_trends(current_filing["cleaned_html"], current_filing["section_index"])
         + extract_capital_metrics(current_filing["cleaned_html"], current_filing["section_index"])
         + _extract_text_values(current_filing)
     )
+    annotate_extracted_value_rows(extracted_values)
     segments = extract_segments(current_filing["cleaned_html"], current_filing["section_index"])
     maturities = extract_debt_maturities(current_filing["cleaned_html"], current_filing["section_index"])
 
@@ -121,7 +129,7 @@ def _extract_text_values(filing: dict) -> list[dict]:
                 "char_start": start,
                 "char_end": start + len(needle),
                 "paragraph_text": needle,
-            }
+            },
         )
 
     investment_row_match = re.search(
@@ -189,9 +197,11 @@ def _extract_text_values(filing: dict) -> list[dict]:
                 "char_start": repurchase_match.start(),
                 "char_end": repurchase_match.end(),
                 "paragraph_text": repurchase_match.group(0),
-            }
+            },
         )
 
+    for r in rows:
+        attach_anchor_fields(r, cleaned_html=html)
     return rows
 
 

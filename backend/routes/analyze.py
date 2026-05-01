@@ -30,6 +30,10 @@ def _parse_ev(row: dict) -> ExtractedValue:
         char_start=int(row["char_start"]),
         char_end=int(row["char_end"]),
         paragraph_text=row["paragraph_text"],
+        anchor_text=row.get("anchor_text"),
+        anchor_hash=row.get("anchor_hash"),
+        display_label=row.get("display_label"),
+        sub_state=row.get("sub_state") or "neutral",
         created_at=row.get("created_at"),
     )
 
@@ -44,6 +48,10 @@ def _parse_rfc(row: dict) -> RiskFactorChange:
         change_type=row["change_type"],
         char_start=int(row["char_start"]) if row.get("char_start") is not None else None,
         char_end=int(row["char_end"]) if row.get("char_end") is not None else None,
+        anchor_text=row.get("anchor_text"),
+        anchor_hash=row.get("anchor_hash"),
+        display_label=row.get("display_label"),
+        sub_state=row.get("sub_state") or "neutral",
         created_at=row.get("created_at"),
     )
 

@@ -43,21 +43,30 @@ function buildDocCitations(dash: DashboardPayload | null, filingId: string): Doc
         category: cat,
         label: ev.label,
         valueDisplay: formatValueForCitation(ev),
+        anchorText: ev.anchor_text ?? null,
+        anchorHash: ev.anchor_hash ?? null,
+        display_label: ev.display_label ?? null,
+        sub_state: ev.sub_state ?? null,
       });
     }
   }
   for (const risk of dash.risk_factor_changes) {
     if (risk.to_filing_id !== filingId) continue;
-    if (risk.char_start == null || risk.char_end == null) continue;
     out.push({
       id: risk.id,
       kind: "risk",
       metricKey: null,
-      charStart: risk.char_start,
-      charEnd: risk.char_end,
+      charStart: risk.char_start ?? -1,
+      charEnd: risk.char_end ?? -1,
       category: "risk",
       label: "Risk factor",
       valueDisplay: risk.factor_text.slice(0, 160),
+      anchorText: risk.anchor_text ?? null,
+      anchorHash: risk.anchor_hash ?? null,
+      display_label: risk.display_label ?? null,
+      sub_state:
+        risk.sub_state ??
+        (risk.change_type !== "unchanged" ? risk.change_type : null),
     });
   }
   return out;
@@ -203,7 +212,7 @@ export default function SourceViewer() {
   const pageError = error ?? cacheError;
 
   return (
-    <div className="flex h-[calc(100vh-48px)] flex-col bg-preview-bg text-preview-text">
+    <div className="mt-3 flex h-[calc(100vh-3rem-0.75rem)] flex-col bg-preview-bg text-preview-text">
       <Toolbar
         title={title}
         onBack={() => navigate(-1)}

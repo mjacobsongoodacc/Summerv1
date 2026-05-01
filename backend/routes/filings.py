@@ -1,7 +1,9 @@
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
+from postgrest.exceptions import APIError
 
+from routes.analyze import _parse_ev, _parse_rfc
 from schemas import FilingDetailResponse
 from supabase_client import supabase
 
@@ -18,6 +20,19 @@ async def get_filing(filing_id: UUID) -> FilingDetailResponse:
     section_index = row.get("section_index") or []
     if isinstance(section_index, str):
         section_index = []
+    fid = str(filing_id)
+    extracted: list = []
+    rfcs: list = []
+    try:
+        ev_res = supabase.table("extracted_values").select("*").eq("filing_id", fid).execute()
+        extracted = [_parse_ev(r) for r in (ev_res.data or [])]
+    except APIError:
+        extracted = []
+    try:
+        rfc_res = supabase.table("risk_factor_changes").select("*").eq("to_filing_id", fid).execute()
+        rfcs = [_parse_rfc(r) for r in (rfc_res.data or [])]
+    except APIError:
+        rfcs = []
     return FilingDetailResponse(
         id=UUID(row["id"]),
         ticker=row["ticker"],
@@ -27,4 +42,6 @@ async def get_filing(filing_id: UUID) -> FilingDetailResponse:
         source_url=row["source_url"],
         cleaned_html=row.get("cleaned_html") or "",
         section_index=section_index if isinstance(section_index, list) else [],
+        extracted_values=extracted,
+        risk_factor_changes=rfcs,
     )

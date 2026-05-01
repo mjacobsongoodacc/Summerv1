@@ -1,7 +1,86 @@
+import type { RiskFactorChange, SectionIndexEntry } from "../types";
+
 export type CiteCategory = "risk" | "financial" | "debt" | "fcf" | "sbc" | "insurance";
 
 /** Alias for cite-class keyed helpers (risk diffs elsewhere use distinct colors). */
 export type CitationClass = CiteCategory;
+
+export type CitationLike = {
+  charStart: number;
+  charEnd: number;
+  category: CiteCategory;
+};
+
+/** Lexical char span from the filings API — invalid if missing endpoints or bogus negatives. */
+function hasValidLexicalSpan(charStart: number, charEnd: number): boolean {
+  return charEnd > charStart && charStart >= 0 && charEnd >= 0;
+}
+
+/** Risk-only listings when we only have anchor hash/text (offsets null / sentinels — e.g. -1). */
+function anchorOnlyRiskMatchesSection(section: SectionIndexEntry): boolean {
+  const name = (section.name ?? "").trim();
+  const anchor = (section.anchor ?? "").toLowerCase();
+  const lowerName = name.toLowerCase();
+
+  const nameMatches =
+    /^item\s+1\s*a\b/i.test(lowerName) ||
+    /\brisks?\b/.test(lowerName) ||
+    /\brisk\s+factor\b/i.test(lowerName) ||
+    /^part\s+i\b(?=\s|,|\.)/i.test(lowerName);
+
+  const slug = anchor.replace(/^#/, "");
+  const anchorMatches =
+    /(^|[^\w])(item[-_]1[-_]a|item1a)([^\w]|$)/i.test(slug) ||
+    /(^|[^\w])(risk[-_]factors?)([^\w]|$)/i.test(slug);
+
+  return nameMatches || anchorMatches;
+}
+
+/** True when citation span overlaps section char range [char_start char_end]. */
+export function overlapsSectionCitation(
+  section: SectionIndexEntry,
+  charStart: number,
+  charEnd: number,
+): boolean {
+  if (!hasValidLexicalSpan(charStart, charEnd)) return false;
+  const cs = section.char_start ?? 0;
+  const ce = section.char_end ?? Number.MAX_SAFE_INTEGER;
+  return charStart <= ce && charEnd >= cs;
+}
+
+/** Citations whose span overlaps `section`, filtered by toolbar category toggles. */
+export function citationsForSection<T extends CitationLike>(
+  section: SectionIndexEntry,
+  citations: readonly T[],
+  enabledCategories: Record<CiteCategory, boolean>,
+): T[] {
+  return citations.filter((c) => {
+    if (!enabledCategories[c.category]) return false;
+    if (hasValidLexicalSpan(c.charStart, c.charEnd)) {
+      return overlapsSectionCitation(section, c.charStart, c.charEnd);
+    }
+    if (c.category === "risk") {
+      return anchorOnlyRiskMatchesSection(section);
+    }
+    return false;
+  });
+}
+
+/** Prefix tag for risk factor change lines (+ / Δ / −) with cite-class-aligned colors. */
+export function riskFactorChangePrefix(
+  changeType: RiskFactorChange["change_type"] | undefined,
+): { symbol: string; className: string } | null {
+  switch (changeType) {
+    case "added":
+      return { symbol: "+", className: "text-cite-fcf" };
+    case "intensified":
+      return { symbol: "Δ", className: "text-cite-debt" };
+    case "removed":
+      return { symbol: "−", className: "text-cite-risk" };
+    default:
+      return null;
+  }
+}
 
 const PALETTE: Record<CiteCategory, string> = {
   risk: "#E55E5E",

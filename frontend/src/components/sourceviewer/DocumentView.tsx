@@ -8,6 +8,8 @@ import {
 } from "react";
 import type { CiteCategory } from "../../lib/citationColors";
 import { classToColor, classToTint, classToTintHover } from "../../lib/citationColors";
+import { citeLabelColor, normalizeSubState, renderDotWithGlyph } from "../../lib/citationGlyph";
+import { normalizeParagraphText, paragraphSha1Hex } from "../../lib/anchorHash";
 
 export interface DocCitation {
   id: string;
@@ -18,6 +20,12 @@ export interface DocCitation {
   category: CiteCategory;
   label: string;
   valueDisplay: string;
+  anchorText?: string | null;
+  anchorHash?: string | null;
+  /** Margin tiny-caps label from API */
+  display_label?: string | null;
+  /** Shape/direction for margin dots */
+  sub_state?: string | null;
 }
 
 type Props = {
@@ -35,158 +43,122 @@ type Props = {
 type MarginDot = {
   id: string;
   top: number;
-  color: string;
+  category: CiteCategory;
   title: string;
+  displayLabel: string | null;
 };
-
-/** Map index in cleaned HTML source to plaintext offset (characters outside `<...>`). */
-function sourceIndexToPlainOffset(htmlSource: string, sourceIdx: number): number {
-  let plain = 0;
-  let i = 0;
-  const end = Math.min(sourceIdx, htmlSource.length);
-  while (i < end) {
-    if (htmlSource[i] === "<") {
-      const close = htmlSource.indexOf(">", i + 1);
-      if (close === -1) break;
-      i = close + 1;
-      continue;
-    }
-    plain += 1;
-    i += 1;
-  }
-  return plain;
-}
-
-function citationPlainRange(
-  htmlSource: string,
-  charStart: number,
-  charEnd: number,
-): { start: number; end: number } | null {
-  if (!(charEnd > charStart) || charStart < 0 || charEnd > htmlSource.length) return null;
-
-  let s = charStart;
-  while (s < htmlSource.length && s < charEnd) {
-    if (htmlSource[s] === "<") {
-      const close = htmlSource.indexOf(">", s + 1);
-      if (close === -1) return null;
-      s = close + 1;
-      continue;
-    }
-    break;
-  }
-  if (s >= charEnd) return null;
-
-  const plainStart = sourceIndexToPlainOffset(htmlSource, s);
-  const plainEnd = sourceIndexToPlainOffset(htmlSource, charEnd);
-  if (!(plainEnd > plainStart)) return null;
-
-  return { start: plainStart, end: plainEnd };
-}
-
-/** Build range over plaintext offsets; populate empty span via surroundContents / fallback. Returns span only on success (caller applies attributes after). */
-function wrapPlainTextRange(container: HTMLElement, plainStart: number, plainEnd: number): HTMLSpanElement | null {
-  if (!(plainEnd > plainStart)) return null;
-
-  const texts: Text[] = [];
-  walkTextNodesSkippingScripts(container, texts);
-
-  let consumed = 0;
-  let startNode: Text | null = null;
-  let startOff = 0;
-  let endNode: Text | null = null;
-  let endOff = 0;
-
-  for (const tn of texts) {
-    const len = tn.length;
-    const nextConsumed = consumed + len;
-    if (startNode === null && plainStart < nextConsumed) {
-      startNode = tn;
-      startOff = plainStart - consumed;
-    }
-    if (plainEnd <= nextConsumed) {
-      endNode = tn;
-      endOff = plainEnd - consumed;
-      break;
-    }
-    consumed += len;
-  }
-
-  if (!startNode || !endNode || startOff < 0 || endOff <= 0 || endOff > endNode.length) {
-    return null;
-  }
-
-  const span = document.createElement("span");
-  const range = document.createRange();
-
-  try {
-    range.setStart(startNode, Math.max(0, startOff));
-    range.setEnd(endNode, Math.min(endOff, endNode.length));
-    try {
-      range.surroundContents(span);
-      return span;
-    } catch {
-      const fragment = range.extractContents();
-      span.appendChild(fragment);
-      range.insertNode(span);
-      return span;
-    }
-  } catch {
-    return null;
-  }
-}
-
-function walkTextNodesSkippingScripts(root: HTMLElement, out: Text[]) {
-  function walk(el: HTMLElement) {
-    const tag = el.tagName?.toUpperCase?.() ?? "";
-    if (tag === "SCRIPT" || tag === "STYLE" || tag === "NOSCRIPT") return;
-
-    for (const child of Array.from(el.childNodes)) {
-      if (child.nodeType === Node.TEXT_NODE) out.push(child as Text);
-      else if (child.nodeType === Node.ELEMENT_NODE) walk(child as HTMLElement);
-    }
-  }
-
-  walk(root);
-}
 
 const LEAK_PATTERN = /\bdata-cite-wrap\b/;
 
-function applyCitationsDom(
-  container: HTMLElement,
+/** Remove legacy span-based wraps from offset-based decoration (older builds). */
+function stripLegacyInlineCiteSpans(secDoc: HTMLElement): void {
+  secDoc.querySelectorAll<HTMLElement>("span[data-cite-wrap]").forEach((span) => {
+    const parent = span.parentNode;
+    if (!parent) return;
+    while (span.firstChild) parent.insertBefore(span.firstChild, span);
+    span.remove();
+  });
+}
+
+function applyAttrsToBlock(el: HTMLElement, c: DocCitation, enabled: Record<CiteCategory, boolean>): void {
+  const cls = c.category;
+  const ids = new Set<string>(
+    ((el.dataset.citeWrap ?? "") as string).split(/\s+/).filter((x): x is string => Boolean(x)),
+  );
+  ids.add(c.id);
+  el.dataset.citeWrap = [...ids].join(" ");
+  el.dataset.citeCat = c.category;
+  if (c.kind === "metric" && c.metricKey) {
+    el.dataset.metricKey = c.metricKey;
+  }
+
+  el.classList.add("cite-target");
+  el.style.setProperty("--cite-tint", classToTint(cls));
+  el.style.setProperty("--cite-tint-hover", classToTintHover(cls));
+  el.style.setProperty("--cite-color", classToColor(cls));
+  el.classList.toggle("cite-filtered", !enabled[cls]);
+}
+
+function collectBlockCandidates(root: HTMLElement): HTMLElement[] {
+  const all = Array.from(root.querySelectorAll<HTMLElement>("p, li, td, th, div"));
+  return all.filter((el) => {
+    if (el.tagName !== "DIV") return true;
+    return !el.querySelector("p, li, td, th, div");
+  });
+}
+
+/** Strip every non-alphanumeric so whitespace/punctuation differences between bs4 and DOM textContent stop blocking matches. */
+function alphanumKey(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/** Hash match on block text, then anchor_text prefix. Never injects offset-based spans (prevents mid-word splits). */
+function applyCitationAnchoring(
+  secDoc: HTMLElement,
   htmlSource: string,
   citations: DocCitation[],
   enabled: Record<CiteCategory, boolean>,
 ): void {
   if (LEAK_PATTERN.test(htmlSource)) {
-    console.warn("[DocumentView] Skipping citation decoration: raw html contains leaked data-cite-wrap (backend/HTML issue)");
+    console.warn("[DocumentView] Skipping citation decoration: HTML string contains leaked data-cite-wrap");
     return;
   }
 
-  const ops = citations
-    .filter((c) => c.charEnd > c.charStart && c.charStart >= 0 && c.charEnd <= htmlSource.length)
-    .map((c) => ({
-      citation: c,
-      plain: citationPlainRange(htmlSource, c.charStart, c.charEnd),
-    }))
-    .filter((o): o is typeof o & { plain: { start: number; end: number } } => o.plain != null)
-    .sort((a, b) => b.plain.end - a.plain.end || b.plain.start - a.plain.start);
+  stripLegacyInlineCiteSpans(secDoc);
 
-  for (const { citation: c, plain } of ops) {
-    const span = wrapPlainTextRange(container, plain.start, plain.end);
-    if (!span) continue;
+  const blocks = collectBlockCandidates(secDoc);
+  const matched = new Set<string>();
 
-    const cls = c.category;
-    span.setAttribute("data-cite-wrap", c.id);
-    span.setAttribute("data-cite-cat", c.category);
-    if (c.kind === "metric" && c.metricKey) {
-      span.setAttribute("data-metric-key", c.metricKey);
+  const byHash = new Map<string, DocCitation[]>();
+  for (const c of citations) {
+    if (!c.anchorHash?.trim()) continue;
+    const list = byHash.get(c.anchorHash) ?? [];
+    list.push(c);
+    byHash.set(c.anchorHash, list);
+  }
+
+  for (const block of blocks) {
+    const norm = normalizeParagraphText(block.textContent ?? "");
+    if (!norm) continue;
+    const hex = paragraphSha1Hex(norm);
+    const group = byHash.get(hex);
+    if (!group) continue;
+    for (const c of group) {
+      if (!enabled[c.category]) continue;
+      applyAttrsToBlock(block, c, enabled);
+      matched.add(c.id);
     }
-    span.classList.add("cite-target");
-    span.style.setProperty("--cite-tint", classToTint(cls));
-    span.style.setProperty("--cite-tint-hover", classToTintHover(cls));
-    span.style.setProperty("--cite-color", classToColor(cls));
-    if (!enabled[cls]) {
-      span.classList.add("cite-filtered");
+  }
+
+  for (const c of citations) {
+    if (matched.has(c.id)) continue;
+    if (!enabled[c.category]) continue;
+    const pref = normalizeParagraphText((c.anchorText ?? "").slice(0, 120));
+    if (!pref) continue;
+    const fullPref = pref.slice(0, 80);
+    if (!fullPref) continue;
+    for (const block of blocks) {
+      const n = normalizeParagraphText(block.textContent ?? "");
+      if (n.includes(fullPref)) {
+        applyAttrsToBlock(block, c, enabled);
+        matched.add(c.id);
+        break;
+      }
+    }
+  }
+
+  const blockKeys: string[] = blocks.map((b) => alphanumKey(b.textContent ?? ""));
+  for (const c of citations) {
+    if (matched.has(c.id)) continue;
+    if (!enabled[c.category]) continue;
+    const probe = alphanumKey((c.anchorText ?? "").slice(0, 200)).slice(0, 50);
+    if (probe.length < 24) continue;
+    for (let i = 0; i < blocks.length; i += 1) {
+      if (blockKeys[i].includes(probe)) {
+        applyAttrsToBlock(blocks[i], c, enabled);
+        matched.add(c.id);
+        break;
+      }
     }
   }
 }
@@ -199,8 +171,20 @@ function qsByMetricKey(container: HTMLElement, key: string): HTMLElement | null 
 
 function qsByCiteWrap(container: HTMLElement, id: string): HTMLElement | null {
   const esc = id.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  const el = container.querySelector(`[data-cite-wrap="${esc}"]`);
-  return el instanceof HTMLElement ? el : null;
+  const direct = container.querySelector(`[data-cite-wrap="${esc}"]`);
+  if (direct instanceof HTMLElement) return direct;
+
+  const all = container.querySelectorAll<HTMLElement>("[data-cite-wrap]");
+  for (const node of all) {
+    const v = node.getAttribute("data-cite-wrap") || "";
+    if (v.split(/\s+/).includes(id)) return node;
+  }
+  return null;
+}
+
+function pulseEl(el: HTMLElement): void {
+  el.classList.add("cite-pulse");
+  window.setTimeout(() => el.classList.remove("cite-pulse"), 2100);
 }
 
 const DocumentView = forwardRef<HTMLDivElement, Props>(function DocumentView(
@@ -237,33 +221,62 @@ const DocumentView = forwardRef<HTMLDivElement, Props>(function DocumentView(
     const secDoc = inner.querySelector<HTMLElement>(".sec-doc");
     if (!secDoc) return;
 
-    Array.from(secDoc.querySelectorAll<HTMLElement>("span[data-cite-wrap]")).forEach((el) => el.remove());
-
     if (!LEAK_PATTERN.test(html)) {
-      applyCitationsDom(secDoc, html, citations, enabledCategories);
+      applyCitationAnchoring(secDoc, html, citations, enabledCategories);
     }
 
     const wraps = secDoc.querySelectorAll<HTMLElement>("[data-cite-wrap]");
     const dots: MarginDot[] = [];
     const cardRect = card.getBoundingClientRect();
+
+    const gapBetweenStacks = 4;
+    const estimateBlockHeight = (cite: DocCitation): number => {
+      const dotRow = 10;
+      const lab = cite.display_label?.trim();
+      if (!lab) return dotRow;
+      return dotRow + 4 + 2 * (9 * 1.1);
+    };
+
     wraps.forEach((el) => {
-      const cat = el.dataset.citeCat as CiteCategory | undefined;
-      if (!cat || !enabledCategories[cat]) return;
-      const id = el.dataset.citeWrap;
-      if (!id) return;
+      const citeWrap = el.dataset.citeWrap ?? "";
+      const ids = citeWrap.trim().split(/\s+/).filter(Boolean);
+      const items = ids
+        .map((citeIdDot) => {
+          const cite = citations.find((c) => c.id === citeIdDot);
+          const cat = cite?.category;
+          if (!cite || !cat || !enabledCategories[cat]) return null;
+          return { citeIdDot, cite };
+        })
+        .filter((x): x is { citeIdDot: string; cite: DocCitation } => x !== null);
+
+      if (items.length === 0) return;
+
       const rects = el.getClientRects();
       const line = rects.length > 0 ? rects[0] : el.getBoundingClientRect();
       const centerY = line.top + line.height / 2 - cardRect.top;
-      const top = centerY - 5;
-      const cite = citations.find((c) => c.id === id);
-      const title = cite ? `${cite.label} — ${cite.valueDisplay}` : "";
-      dots.push({
-        id,
-        top,
-        color: classToColor(cat),
-        title,
+
+      const heights = items.map(({ cite }) => estimateBlockHeight(cite));
+      let totalH = 0;
+      heights.forEach((h, ix) => {
+        totalH += h + (ix > 0 ? gapBetweenStacks : 0);
+      });
+
+      let yCursor = centerY - totalH / 2;
+
+      items.forEach(({ citeIdDot, cite }, ix) => {
+        const lab = cite.display_label?.trim() ? cite.display_label.trim() : null;
+        dots.push({
+          id: citeIdDot,
+          top: yCursor,
+          category: cite.category,
+          title: `${cite.label} — ${cite.valueDisplay}`,
+          displayLabel: lab,
+        });
+        yCursor += heights[ix];
+        if (ix < items.length - 1) yCursor += gapBetweenStacks;
       });
     });
+
     setMarginDots(dots);
   }, [html, citations, enabledCategories, empty, zoom]);
 
@@ -274,10 +287,8 @@ const DocumentView = forwardRef<HTMLDivElement, Props>(function DocumentView(
     if (!(secDoc instanceof HTMLElement)) return;
     const el = qsByMetricKey(secDoc, citeMetricKey);
     if (!el) return;
-    el.scrollIntoView({ block: "center", behavior: "auto" });
-    el.classList.add("cite-pulse");
-    const t = window.setTimeout(() => el.classList.remove("cite-pulse"), 3100);
-    return () => window.clearTimeout(t);
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    pulseEl(el);
   }, [citeMetricKey, html]);
 
   useEffect(() => {
@@ -286,17 +297,11 @@ const DocumentView = forwardRef<HTMLDivElement, Props>(function DocumentView(
     const root = secDoc ?? inner;
     if (!root) return;
 
-    const fallback = () => {
-      if (!citeId) return;
+    if (citeId) {
       const el = qsByCiteWrap(root, citeId);
       if (!el) return;
-      el.scrollIntoView({ block: "center", behavior: "auto" });
-      el.classList.add("cite-pulse");
-      window.setTimeout(() => el.classList.remove("cite-pulse"), 3100);
-    };
-
-    if (citeId) {
-      fallback();
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      pulseEl(el);
       return;
     }
 
@@ -309,9 +314,8 @@ const DocumentView = forwardRef<HTMLDivElement, Props>(function DocumentView(
     if (!target) return;
     const el = qsByCiteWrap(root, target.id);
     if (!el) return;
-    el.scrollIntoView({ block: "center", behavior: "auto" });
-    el.classList.add("cite-pulse");
-    window.setTimeout(() => el.classList.remove("cite-pulse"), 3100);
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    pulseEl(el);
   }, [citeEnd, citeId, citeStart, citations, html]);
 
   useEffect(() => {
@@ -321,38 +325,47 @@ const DocumentView = forwardRef<HTMLDivElement, Props>(function DocumentView(
     if (!pulseRequest || !root) return;
     const el = qsByCiteWrap(root, pulseRequest.citationId);
     if (!el) return;
-    el.scrollIntoView({ block: "center", behavior: "auto" });
-    el.classList.add("cite-pulse");
-    window.setTimeout(() => el.classList.remove("cite-pulse"), 3100);
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    pulseEl(el);
   }, [pulseRequest, html]);
 
   return (
     <div ref={outerRef} className="relative mx-auto max-w-[900px]">
       <div
         ref={cardRef}
-        className="relative border border-preview-docBorder bg-preview-docBg py-14 pl-9 pr-14 text-preview-docText shadow-2xl"
+        className="relative border border-preview-docBorder bg-preview-docBg py-14 pl-[100px] pr-14 text-preview-docText shadow-2xl"
       >
-        {marginDots.map((d) => (
-          <button
-            key={d.id}
-            type="button"
-            aria-label={d.title}
-            title={d.title}
-            className="pointer-events-auto absolute left-[12px] h-[10px] w-[10px]"
-            style={{ top: d.top, backgroundColor: d.color }}
-            onClick={() => {
-              const inner = innerRef.current;
-              const secDoc = inner?.querySelector(".sec-doc") as HTMLElement | null;
-              const root = secDoc ?? inner;
-              if (!root) return;
-              const el = qsByCiteWrap(root, d.id);
-              if (!el) return;
-              el.scrollIntoView({ block: "center", behavior: "auto" });
-              el.classList.add("cite-pulse");
-              window.setTimeout(() => el.classList.remove("cite-pulse"), 3100);
-            }}
-          />
-        ))}
+        {marginDots.map((d) => {
+          const cite = citations.find((c) => c.id === d.id);
+          const sub = normalizeSubState(cite?.sub_state);
+          return (
+            <button
+              key={d.id}
+              type="button"
+              aria-label={d.title}
+              title={d.title}
+              className="cite-margin-hit pointer-events-auto absolute left-0 flex w-[88px] flex-col items-center pr-3"
+              style={{ top: d.top }}
+              onClick={() => {
+                const inner = innerRef.current;
+                const secDoc = inner?.querySelector(".sec-doc") as HTMLElement | null;
+                const root = secDoc ?? inner;
+                if (!root) return;
+                const el = qsByCiteWrap(root, d.id);
+                if (!el) return;
+                el.scrollIntoView({ block: "center", behavior: "smooth" });
+                pulseEl(el);
+              }}
+            >
+              {renderDotWithGlyph(d.category, sub)}
+              {d.displayLabel ? (
+                <div className="cite-label line-clamp-2 break-words" style={{ color: citeLabelColor(d.category) }}>
+                  {d.displayLabel}
+                </div>
+              ) : null}
+            </button>
+          );
+        })}
         <div
           ref={innerRef}
           className="doc-inner"

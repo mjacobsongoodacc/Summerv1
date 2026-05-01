@@ -1,8 +1,9 @@
 import { useMemo } from "react";
 import ContentsList from "./ContentsList";
 import type { DocCitation } from "./DocumentView";
-import type { FilingDetailResponse, SectionIndexEntry } from "../../types";
+import type { FilingDetailResponse, RiskFactorChange, SectionIndexEntry } from "../../types";
 import type { CiteCategory } from "../../lib/citationColors";
+import { useAppShell } from "../../AppContext";
 
 type Props = {
   open: boolean;
@@ -53,6 +54,23 @@ export default function Sidebar({
   onPickSection,
   onPickCitation,
 }: Props) {
+  const { data: shellPayload } = useAppShell();
+
+  const riskChangeTypeByCitationId = useMemo(() => {
+    const out: Record<string, RiskFactorChange["change_type"]> = {};
+    if (
+      !filing?.id ||
+      !shellPayload?.risk_factor_changes?.length ||
+      shellPayload.filing.id !== filing.id
+    ) {
+      return out;
+    }
+    for (const r of shellPayload.risk_factor_changes) {
+      if (r.to_filing_id === filing.id) out[r.id] = r.change_type;
+    }
+    return out;
+  }, [filing?.id, shellPayload?.filing?.id, shellPayload?.risk_factor_changes]);
+
   const doc = useMemo(() => new DOMParser().parseFromString(html || "<body></body>", "text/html"), [html]);
 
   const preservedExcerptChars = useMemo(() => {
@@ -84,6 +102,7 @@ export default function Sidebar({
               sections={sections}
               citations={citations}
               enabledCategories={enabledCategories}
+              riskChangeTypeByCitationId={riskChangeTypeByCitationId}
               onPickSection={onPickSection}
               onPickCitation={onPickCitation}
             />
